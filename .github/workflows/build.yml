@@ -1,0 +1,34 @@
+# CRATE RIPPA (JJ DA PLUG): builds the plugin for the MPC and offers the finished ZIP as a download.
+# Start: tab "Actions" -> "Build Crate Rippa" -> "Run workflow". Then download "crate-rippa-v1.0.0" under "Artifacts".
+name: Build Crate Rippa
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: 1.0.0
+      MPC_VST: ${{ github.workspace }}/mpc-vst-plugins
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/checkout@v4
+        with:
+          repository: open-mpc/mpc-vst-plugins
+          ref: 2c2ee0f621a0ff43411b8c7d7697a06e166e6b94
+          path: mpc-vst-plugins
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - run: python3 -m pip install --quiet pillow fonttools
+      - name: Build
+        run: bash src/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate-rippa-v1.0.0
+          path: |
+            src/dist/*.zip
+            src/dist/preview/*.png
