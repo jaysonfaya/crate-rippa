@@ -1,0 +1,116 @@
+# CRATE RIPPA Desktop (JJ DA PLUG): builds the plug-in for Windows, macOS and Linux and offers the ZIPs as downloads.
+# The sources are in desktop/ (the MPC version stays at the top level with its own build.yml).
+# Start: tab "Actions" -> "Build Crate Rippa Desktop" -> "Run workflow". Downloads under "Artifacts" when the run is green:
+#   crate-rippa-desktop-windows   VST3, VST2 (Crate Rippa.dll for MPC 2), Standalone (.exe)
+#   crate-rippa-desktop-macos     VST3, AU, VST2, Standalone (Universal: Apple Silicon + Intel), ad hoc signed
+#   crate-rippa-desktop-linux     VST3, Standalone; this job also runs the tests
+name: Build Crate Rippa Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["crate-rippa-desktop-v*"]
+    paths: ["desktop/**", ".github/workflows/desktop.yml"]
+
+env:
+  VERSION: 1.0.0
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxcomposite-dev libxext-dev libfreetype6-dev libfontconfig1-dev libcurl4-openssl-dev libgl1-mesa-dev ffmpeg python3
+      - name: Engine test (sanitizers)
+        run: |
+          cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCR_TESTS=ON -DCR_PLUGIN=OFF -DCR_SANITIZE=ON
+          cmake --build build-asan --target cr_engine_test
+          ./build-asan/cr_engine_test_artefacts/Debug/cr_engine_test "$PWD/test/fake_ytdlp.py"
+          CR_TEST_FFMPEG=/usr/bin/ffmpeg ./build-asan/cr_engine_test_artefacts/Debug/cr_engine_test "$PWD/test/fake_ytdlp.py"
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCR_TESTS=ON -DCR_VST2=ON
+          cmake --build build
+      - name: Host tests (VST3 and VST2)
+        run: |
+          ./build/cr_host_test_artefacts/Release/cr_host_test "build/CrateRippa_artefacts/Release/VST3/Crate Rippa.vst3" /tmp/cr_engine_test/song.wav
+          ./build/cr_vst2_test "build/CrateRippa_artefacts/Release/VST/libCrate Rippa.so"
+      - name: Package
+        run: |
+          mkdir -p "dist/Crate Rippa Desktop $VERSION Linux"
+          cp -r "build/CrateRippa_artefacts/Release/VST3/Crate Rippa.vst3" "dist/Crate Rippa Desktop $VERSION Linux/"
+          cp "build/CrateRippa_artefacts/Release/Standalone/Crate Rippa" "dist/Crate Rippa Desktop $VERSION Linux/"
+          cp LIESMICH.md LICENSE-THIRD-PARTY.md "dist/Crate Rippa Desktop $VERSION Linux/"
+          cd dist && zip -qry "Crate-Rippa-Desktop-$VERSION-Linux.zip" "Crate Rippa Desktop $VERSION Linux"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate-rippa-desktop-linux
+          path: desktop/dist/*.zip
+
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCR_VST2=ON
+          cmake --build build --config Release --parallel
+      - name: Package
+        shell: pwsh
+        run: |
+          $d = "dist/Crate Rippa Desktop $env:VERSION Windows"
+          New-Item -ItemType Directory -Force -Path "$d/VST3", "$d/VST2 (MPC 2)", "$d/Standalone" | Out-Null
+          Copy-Item -Recurse "build/CrateRippa_artefacts/Release/VST3/Crate Rippa.vst3" "$d/VST3/"
+          Copy-Item "build/CrateRippa_artefacts/Release/VST/Crate Rippa.dll" "$d/VST2 (MPC 2)/"
+          Copy-Item "build/CrateRippa_artefacts/Release/Standalone/Crate Rippa.exe" "$d/Standalone/"
+          Copy-Item LIESMICH.md, LICENSE-THIRD-PARTY.md $d
+          Compress-Archive -Path $d -DestinationPath "dist/Crate-Rippa-Desktop-$env:VERSION-Windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate-rippa-desktop-windows
+          path: desktop/dist/*.zip
+
+  macos:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Universal)
+        run: |
+          brew install ninja
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCR_VST2=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build
+      - name: Sign (ad hoc) and check the AU
+        run: |
+          A="build/CrateRippa_artefacts/Release"
+          for b in "$A/VST3/Crate Rippa.vst3" "$A/AU/Crate Rippa.component" "$A/VST/Crate Rippa.vst" "$A/Standalone/Crate Rippa.app"; do
+            codesign --force --deep -s - "$b"
+          done
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "$A/AU/Crate Rippa.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aumu JJcR JJdp || echo "auval did not pass (see the log above)"
+      - name: Package
+        run: |
+          A="build/CrateRippa_artefacts/Release"
+          D="dist/Crate Rippa Desktop $VERSION macOS"
+          mkdir -p "$D"
+          cp -R "$A/VST3/Crate Rippa.vst3" "$A/AU/Crate Rippa.component" "$A/VST/Crate Rippa.vst" "$A/Standalone/Crate Rippa.app" "$D/"
+          cp LIESMICH.md LICENSE-THIRD-PARTY.md "$D/"
+          cd dist && ditto -c -k --sequesterRsrc --keepParent "Crate Rippa Desktop $VERSION macOS" "Crate-Rippa-Desktop-$VERSION-macOS.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate-rippa-desktop-macos
+          path: desktop/dist/*.zip
