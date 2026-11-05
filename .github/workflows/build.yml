@@ -1,10 +1,14 @@
-# CRATE RIPPA (JJ DA PLUG): builds the plugin for the MPC and offers the finished ZIPs as a download.
-# Start: tab "Actions" -> "Build Crate Rippa" -> "Run workflow". Then download "crate-rippa-v1.0.1" under "Artifacts".
-# It holds two ZIPs: ...-mpc-armv7.zip for the MPC Live 1 (Gen1) and ...-mpc-aarch64.zip for the MPC Live III (Gen2).
+# CRATE RIPPA (JJ DA PLUG): builds the plugin for the MPC and publishes the finished ZIPs as a GitHub release.
+# Start: tab "Actions" -> "Build Crate Rippa" -> "Run workflow". Then download from the "Releases" page (right side of the repo):
+#   ...-mpc-armv7.zip for the MPC Live 1 (Gen1), ...-mpc-aarch64.zip for the MPC Live III (Gen2).
+# A new run with the same VERSION replaces the files of that release.
 name: Build Crate Rippa
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -35,3 +39,20 @@ jobs:
           path: |
             src/dist/*.zip
             src/dist/preview/*.png
+      - name: Publish release v${{ env.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd src
+          TAG="v$VERSION"
+          NOTES="CRATE RIPPA $VERSION by JJ DA PLUG
+
+          - Crate-Rippa-$VERSION-mpc-aarch64.zip: MPC Live III (Gen2, MPC OS 3.x)
+          - Crate-Rippa-$VERSION-mpc-armv7.zip: MPC Live 1 (Gen1)
+
+          Do not unzip. Copy the ZIP for your MPC into local-plugins/ on the Plugin Manager USB stick."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber
+          else
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --title "Crate Rippa $VERSION" --notes "$NOTES"
+          fi
