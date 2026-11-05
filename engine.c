@@ -18,6 +18,7 @@
 #include <math.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
@@ -33,7 +34,7 @@
 #include <stdarg.h>
 #include "engine.h"
 
-#define VERSION "1.0.0"
+#define VERSION "1.0.1"
 #define SR 44100
 #define MAX_SEC 600
 #define MAXF (SR * MAX_SEC)
@@ -96,6 +97,33 @@ static void safe_name(char *d, size_t n, const char *s) {
     while (j && d[j - 1] == ' ') j--;
     d[j] = 0;
     if (!j) cpy(d, "Crate Rippa", n);
+}
+
+/* ------------------------------------------------------------------ fast cores (MPC Live III)
+ * Gen2 is big.LITTLE: cores 0-3 Cortex-A55, 4-7 Cortex-A76 (~3x faster). Linux would also put the helper threads (and the
+ * ffmpeg/Python children they start, which inherit it) on the slow cores. Pin them to the fast ones minus the last, where
+ * MPC's "Audio Processing" thread lives (after open-mpc wrapper/fast_cores.h). They stay normal priority, so MPC's real-time
+ * audio threads always win. On a CPU whose cores all have the same top speed (Gen1, Force) this changes nothing. */
+static void pin_fast_cores(void) {
+    long f[64], best = 0;
+    int n = 0;
+    for (; n < 64; n++) {
+        char p[96];
+        snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", n);
+        FILE *fp = fopen(p, "r");
+        if (!fp) break;
+        if (fscanf(fp, "%ld", &f[n]) != 1) f[n] = 0;
+        fclose(fp);
+        if (f[n] > best) best = f[n];
+    }
+    int fast[64], nf = 0, mixed = 0;
+    for (int i = 0; i < n; i++) { if (f[i] == best && best > 0) fast[nf++] = i; else mixed = 1; }
+    if (!mixed || !nf) return;
+    if (nf >= 3) nf--;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int i = 0; i < nf; i++) CPU_SET(fast[i], &set);
+    sched_setaffinity(0, sizeof set, &set);
 }
 
 /* ------------------------------------------------------------------ child processes */
@@ -441,6 +469,7 @@ static int16_t *bounce(const pad_t *p, const int16_t *src, int slen, int *out_fr
 
 static void *job_main(void *arg) {
     inst_t *t = arg;
+    pin_fast_cores();
     pthread_mutex_lock(&t->m);
     while (!t->quit) {
         if (!t->jobs) { pthread_cond_wait(&t->job_cv, &t->m); continue; }
@@ -597,6 +626,7 @@ static void start_load_url(inst_t *t, const char *id, const char *url, const cha
 
 static void *net_main(void *arg) {
     inst_t *t = arg;
+    pin_fast_cores();
     char line[8192], cmd[400];
     pthread_mutex_lock(&t->m);
     while (!t->quit) {
@@ -768,6 +798,7 @@ static int pump(inst_t *t, unsigned gen, int fd, int cache_fd, pid_t *child) {
 
 static void *load_main(void *arg) {
     inst_t *t = arg;
+    pin_fast_cores();
     pthread_mutex_lock(&t->m);
     while (!t->quit) {
         if (!t->load_req) { pthread_cond_wait(&t->load_cv, &t->m); continue; }
@@ -1790,7 +1821,8 @@ static void export_pads(inst_t *t) {
     if (!used) { set_status(t, "NO CHOPS TO EXPORT"); return; }
     char name[64], root[300] = "", dir[460];
     safe_name(name, sizeof name, t->song_title[0] ? t->song_title : "chops");
-    const char *roots[] = {"/sdcard/MPC Documents", "/sdcard/Force Documents", NULL};
+    /* Gen1 MPC and Force: /sdcard; Gen2: /nvme (Live III, XL) or /storage (One G2, Key 37 G2) */
+    const char *roots[] = {"/sdcard/MPC Documents", "/sdcard/Force Documents", "/nvme/MPC Documents", "/storage/MPC Documents", NULL};
     struct stat st;
     for (int i = 0; roots[i]; i++) if (!stat(roots[i], &st) && S_ISDIR(st.st_mode)) { snprintf(root, sizeof root, "%s/CRATE RIPPA", roots[i]); break; }
     if (!root[0]) snprintf(root, sizeof root, "%s/exports", t->dir);

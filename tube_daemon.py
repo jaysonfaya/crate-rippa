@@ -16,6 +16,16 @@ import urllib.parse
 
 YT = None
 
+# The bundled Python looks for root certificates where its build machine kept them. Point it at the MPC's own bundle
+# (Gen1 and Gen2 differ), so HTTPS to YouTube verifies on every model. A bundle set from outside is kept.
+if not os.environ.get("SSL_CERT_FILE"):
+    for _ca in ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/ca-bundle.crt"):
+        if os.path.isfile(_ca):
+            os.environ["SSL_CERT_FILE"] = _ca
+            break
+if not os.environ.get("SSL_CERT_DIR") and os.path.isdir("/etc/ssl/certs"):
+    os.environ["SSL_CERT_DIR"] = "/etc/ssl/certs"
+
 
 def out(*fields):
     sys.stdout.write("\t".join(str(f).replace("\t", " ").replace("\n", " ").replace("\r", " ").strip() for f in fields) + "\n")
@@ -32,7 +42,8 @@ def why(exc):
                        ("temporary failure in name resolution", "NO INTERNET"), ("network is unreachable", "NO INTERNET"),
                        ("http error 429", "YOUTUBE BUSY, TRY LATER"), ("unable to connect", "NO INTERNET"),
                        ("unable to download api page", "NO INTERNET"), ("connection refused", "NO INTERNET"), ("page needs to be reloaded", "UPDATE YT-DLP (INFO)"),
-                       ("sign in to confirm you", "YOUTUBE ASKS FOR LOGIN")):
+                       ("sign in to confirm you", "YOUTUBE ASKS FOR LOGIN"),
+                       ("certificate verify failed", "HTTPS CERTIFICATE ERROR"), ("ssl:", "HTTPS ERROR")):
         if key in low:
             return short
     t = t.replace("ERROR: ", "")

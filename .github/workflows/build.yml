@@ -1,5 +1,6 @@
-# CRATE RIPPA (JJ DA PLUG): builds the plugin for the MPC and offers the finished ZIP as a download.
-# Start: tab "Actions" -> "Build Crate Rippa" -> "Run workflow". Then download "crate-rippa-v1.0.0" under "Artifacts".
+# CRATE RIPPA (JJ DA PLUG): builds the plugin for the MPC and offers the finished ZIPs as a download.
+# Start: tab "Actions" -> "Build Crate Rippa" -> "Run workflow". Then download "crate-rippa-v1.0.1" under "Artifacts".
+# It holds two ZIPs: ...-mpc-armv7.zip for the MPC Live 1 (Gen1) and ...-mpc-aarch64.zip for the MPC Live III (Gen2).
 name: Build Crate Rippa
 
 on:
@@ -9,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      VERSION: 1.0.0
+      VERSION: 1.0.1
       MPC_VST: ${{ github.workspace }}/mpc-vst-plugins
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +23,15 @@ jobs:
           path: mpc-vst-plugins
       - uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm
+          platforms: arm,arm64
       - run: python3 -m pip install --quiet pillow fonttools
-      - name: Build
-        run: bash src/build.sh
+      - name: Build for MPC Live 1 (armv7)
+        run: TARGET=armv7 bash src/build.sh
+      - name: Build for MPC Live III (aarch64)
+        run: TARGET=aarch64 bash src/build.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: crate-rippa-v1.0.0
+          name: crate-rippa-v1.0.1
           path: |
             src/dist/*.zip
             src/dist/preview/*.png

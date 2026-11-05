@@ -580,9 +580,11 @@ ro_("ytdlp_txt", 1000, Y(578), 320, 30, 18, "a8a49a", "left")
 btn("ytdlp_update", 1140, Y(530), 240, 52, "ytdlp")
 open(OUT + "/layout.conf", "w").write("\n".join(Lc) + "\n")
 
-json.dump({"name": "Crate Rippa", "vendor": "JJ DA PLUG", "uid": "JJcR", "version": 1000, "so": "jj_craterippa.so", "params": "params.json",
-           "layout": "layout.conf", "art": "html",
+json.dump({"name": "Crate Rippa", "vendor": "JJ DA PLUG", "uid": "JJcR", "version": 1001, "so": "jj_craterippa.so", "params": "params.json",
+           "layout": "layout.conf", "art": "html", "targets": ["armv7", "aarch64"],
            "defines": {"PARAM_TEXT_MAX": 128, "HAS_DISPLAY_REV": 1, "HAS_SONG_POS": 1, "HAS_LFO_BPM": 1, "MODULE_SUBDIR": "\"craterippa\""},
-           "build": {"root": ".", "sources": ["engine.c"], "cflags": ["-O2", "-Wno-format-truncation"], "libs": ["-lpthread", "-lm", "-ldl"]}},
+           "build": {"root": ".", "sources": ["engine.c"], "cflags": ["-O2", "-Wno-format-truncation"],
+                     # Live III (Gen2, RK3588: Cortex-A76 + A55): -O3 tuned for its cores, plain ARMv8-A code so every core runs it
+                     "cflags_aarch64": ["-O3", "-march=armv8-a", "-mtune=cortex-a76.cortex-a55"], "libs": ["-lpthread", "-lm", "-ldl"]}},
           open(OUT + "/vst.json", "w"), indent=1)
 print("params", len(P), "layout lines", len(Lc))
