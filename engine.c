@@ -34,7 +34,7 @@
 #include <stdarg.h>
 #include "engine.h"
 
-#define VERSION "1.0.1"
+#define VERSION "1.0.2"
 #define SR 44100
 #define MAX_SEC 600
 #define MAXF (SR * MAX_SEC)
@@ -349,7 +349,7 @@ typedef struct inst {
     int load_req;                   /* 1: url, 2: cache file */
     char load_url[4096], load_ua[256];
     unsigned load_gen;
-    pid_t fpid;
+    pid_t fpid, gpid;   /* ffmpeg and the Python fetcher that feeds it */
     /* ---- job thread */
     struct job { int kind; char path[560]; int16_t *d; int len; pad_t pp; struct job *next; } *jobs;
     volatile int exporting;
@@ -821,25 +821,34 @@ static void *load_main(void *arg) {
             if (fd >= 0) close(fd);
             load_finish(t, gen, got > 0, got > 0 ? "LOADED FROM CACHE" : "CACHE BROKEN, TAP THE SONG AGAIN");
         } else {
-            char ff[520];
+            /* The bundled ffmpeg is a static glibc build: it cannot look up host names on a newer MPC firmware (the Live III's
+             * glibc 2.39 has no libnss_dns module for it to load), so it never opens the YouTube URL itself. The bundled
+             * Python (dynamically linked, so DNS and HTTPS work) downloads the stream in chunks and pipes it in; ffmpeg only
+             * decodes. Same on Gen1. */
+            char ff[520], py[520], scr[520];
             snprintf(ff, sizeof ff, "%s/bin/ffmpeg", t->dir);
-            int pp[2];
-            if (access(ff, X_OK) || pipe2(pp, O_CLOEXEC)) { load_finish(t, gen, 0, "FFMPEG MISSING: REINSTALL"); pthread_mutex_lock(&t->m); continue; }
+            snprintf(py, sizeof py, "%s/bin/python3/bin/python3", t->dir);
+            snprintf(scr, sizeof scr, "%s/bin/tube_daemon.py", t->dir);
+            int pp[2], gp[2];
+            if (access(ff, X_OK) || access(py, X_OK) || pipe2(pp, O_CLOEXEC)) { load_finish(t, gen, 0, "FFMPEG MISSING: REINSTALL"); pthread_mutex_lock(&t->m); continue; }
+            if (pipe2(gp, O_CLOEXEC)) { close(pp[0]); close(pp[1]); load_finish(t, gen, 0, "COULD NOT STREAM THIS SONG, TRY ANOTHER"); pthread_mutex_lock(&t->m); continue; }
+            char *gargv[] = {py, "-u", "-s", scr, "--fetch", url, ua, NULL};
+            pid_t gpid = spawn(py, gargv, -1, gp[1]);
+            close(gp[1]);
             char tsec[16];
             snprintf(tsec, sizeof tsec, "%d", MAX_SEC);
             char *argv[40];
             int a = 0;
-            argv[a++] = ff; argv[a++] = "-nostdin"; argv[a++] = "-hide_banner"; argv[a++] = "-loglevel"; argv[a++] = "error";
-            argv[a++] = "-reconnect"; argv[a++] = "1"; argv[a++] = "-reconnect_streamed"; argv[a++] = "1";
-            argv[a++] = "-reconnect_delay_max"; argv[a++] = "4"; argv[a++] = "-rw_timeout"; argv[a++] = "20000000";
-            if (ua[0]) { argv[a++] = "-user_agent"; argv[a++] = ua; }
-            argv[a++] = "-i"; argv[a++] = url; argv[a++] = "-t"; argv[a++] = tsec; argv[a++] = "-vn";
+            argv[a++] = ff; argv[a++] = "-hide_banner"; argv[a++] = "-loglevel"; argv[a++] = "error";
+            argv[a++] = "-i"; argv[a++] = "pipe:0"; argv[a++] = "-t"; argv[a++] = tsec; argv[a++] = "-vn";
             argv[a++] = "-ac"; argv[a++] = "2"; argv[a++] = "-ar"; argv[a++] = "44100"; argv[a++] = "-f"; argv[a++] = "s16le";
             argv[a++] = "pipe:1"; argv[a] = NULL;
-            pid_t pid = spawn(ff, argv, -1, pp[1]);
+            pid_t pid = gpid > 0 ? spawn(ff, argv, gp[0], pp[1]) : -1;
+            close(gp[0]);
             close(pp[1]);
             pthread_mutex_lock(&t->m);
             t->fpid = pid;
+            t->gpid = gpid;
             pthread_mutex_unlock(&t->m);
             int got = 0;
             if (pid > 0) {
@@ -856,10 +865,11 @@ static void *load_main(void *arg) {
             }
             close(pp[0]);
             pthread_mutex_lock(&t->m);
-            pid_t kp = t->fpid;
-            t->fpid = -1;
+            pid_t kp = t->fpid, kg = t->gpid;
+            t->fpid = t->gpid = -1;
             pthread_mutex_unlock(&t->m);
             reap(&kp);
+            reap(&kg);
             if (got > SR && gen == t->gen) {   /* remember it */
                 struct job *j = calloc(1, sizeof *j);
                 if (j) {
@@ -952,6 +962,7 @@ static void new_song(inst_t *t, const char *id, const char *title, int secs) {
     pthread_mutex_lock(&t->m);
     t->gen++;
     if (t->fpid > 0) kill(t->fpid, SIGKILL);   /* the loader reaps it */
+    if (t->gpid > 0) kill(t->gpid, SIGKILL);
     t->avail = 0;
     t->total = secs > 0 ? secs * SR : 0;
     t->nhop = 0;
@@ -1253,7 +1264,7 @@ static void *create(const char *data_dir) {
     pthread_cond_init(&t->net_cv, NULL);
     pthread_cond_init(&t->load_cv, NULL);
     pthread_cond_init(&t->job_cv, NULL);
-    t->dpid = t->fpid = -1;
+    t->dpid = t->fpid = t->gpid = -1;
     t->din = t->dout = -1;
     for (int i = 0; i < NPAD; i++) pad_clear(&t->pad[i]);
     t->vol = 0.8f; t->padvol = 1.0f; t->bpm = 90; t->slice = 1; t->sens = 0.5f; t->chop_by = CH_LAZY;
@@ -1293,6 +1304,7 @@ static void destroy(void *vp) {
     t->quit = 1;
     t->gen++;
     if (t->fpid > 0) kill(t->fpid, SIGKILL);
+    if (t->gpid > 0) kill(t->gpid, SIGKILL);
     if (t->dpid > 0) kill(t->dpid, SIGKILL);
     pthread_cond_broadcast(&t->net_cv);
     pthread_cond_broadcast(&t->load_cv);
