@@ -8,7 +8,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MV="${MPC_VST:?set MPC_VST to an mpc-vst-plugins checkout}"
-VERSION="${VERSION:-1.0.1}"
+VERSION="${VERSION:-1.0.2}"
 TARGET="${TARGET:-armv7}"
 case "$TARGET" in armv7|aarch64) ;; *) echo "TARGET must be armv7 or aarch64"; exit 1 ;; esac
 cd "$HERE"

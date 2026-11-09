@@ -12,6 +12,7 @@
 # Any failure answers ERR <short reason>. Uses the open-source yt-dlp (Unlicense). Part of the plugin, MIT.
 import os
 import sys
+import time
 import urllib.parse
 
 YT = None
@@ -137,6 +138,47 @@ def resolve(vid):
     out("URL", url, ua, secs(d), d.get("title") or vid)
 
 
+def fetch(url, ua):
+    """`--fetch URL UA`: write the stream to stdout for ffmpeg (which cannot look up host names itself). 10 MB ranges,
+    like yt-dlp, because YouTube slows down one long request; a broken chunk is retried from where it stopped."""
+    import urllib.request
+    dst = sys.stdout.buffer
+    head = {"User-Agent": ua or "Mozilla/5.0", "Accept": "*/*", "Accept-Encoding": "identity"}
+    pos, total, step, fails = 0, None, 10 * 1024 * 1024, 0
+    while total is None or pos < total:
+        req = urllib.request.Request(url, headers=dict(head, Range="bytes=%d-%d" % (pos, pos + step - 1)))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                cr = r.headers.get("Content-Range") or ""
+                whole = r.status == 200          # server ignored the range: this answer is the whole file
+                if "/" in cr and not cr.endswith("/*"):
+                    total = int(cr.rsplit("/", 1)[1])
+                got = 0
+                while True:
+                    b = r.read(65536)
+                    if not b:
+                        break
+                    dst.write(b)
+                    got += len(b)
+                pos += got
+                fails = 0
+                if whole or got == 0 or (total is None and got < step):
+                    break
+        except BrokenPipeError:
+            return 0                             # ffmpeg stopped (song changed or 10 minutes reached)
+        except Exception as exc:
+            fails += 1
+            if fails > 3:
+                sys.stderr.write("fetch: %s\n" % exc)
+                return 1
+            time.sleep(fails)
+    try:
+        dst.flush()
+    except BrokenPipeError:
+        pass
+    return 0
+
+
 def update(path):
     import urllib.request
     tmp = path + ".new"
@@ -150,6 +192,8 @@ def update(path):
 
 def main():
     global YT
+    if len(sys.argv) > 3 and sys.argv[1] == "--fetch":
+        return fetch(sys.argv[2], sys.argv[3])
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         sys.path.insert(0, sys.argv[1])
     try:
