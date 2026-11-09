@@ -1,0 +1,41 @@
+{
+ "name": "Crate Rippa",
+ "vendor": "JJ DA PLUG",
+ "uid": "JJcR",
+ "version": 1001,
+ "so": "jj_craterippa.so",
+ "params": "params.json",
+ "layout": "layout.conf",
+ "art": "html",
+ "targets": [
+  "armv7",
+  "aarch64"
+ ],
+ "defines": {
+  "PARAM_TEXT_MAX": 128,
+  "HAS_DISPLAY_REV": 1,
+  "HAS_SONG_POS": 1,
+  "HAS_LFO_BPM": 1,
+  "MODULE_SUBDIR": "\"craterippa\""
+ },
+ "build": {
+  "root": ".",
+  "sources": [
+   "engine.c"
+  ],
+  "cflags": [
+   "-O2",
+   "-Wno-format-truncation"
+  ],
+  "cflags_aarch64": [
+   "-O3",
+   "-march=armv8-a",
+   "-mtune=cortex-a76.cortex-a55"
+  ],
+  "libs": [
+   "-lpthread",
+   "-lm",
+   "-ldl"
+  ]
+ }
+}
